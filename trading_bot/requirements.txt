@@ -31,3 +31,9 @@ requests>=2.32
 pytest>=8.0
 pytest-cov>=5.0
 freezegun>=1.5
+
+# --- research notebooks (dev-only, not needed to run the bot) ---
+jupyter>=1.0
+nbclient>=0.10
+nbformat>=5.10
+ipykernel>=6.29

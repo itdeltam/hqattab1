@@ -4,8 +4,8 @@ A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
 Built stage by stage; see `BUILD ORDER` in the project brief. **Stage 1
-(scaffolding, config, mode switch) is done.** Stages 2-12 are not implemented
-yet.
+(scaffolding, config, mode switch) and Stage 2 (strategy math spec) are
+done.** Stages 3-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -51,3 +51,14 @@ pytest
 `tests/test_startup_safety.py` is the load-bearing test suite for Stage 1:
 it asserts PAPER/APPROVAL never prompt, and LIVE mode refuses to proceed
 without the exact typed confirmation phrase.
+
+## Research
+
+`research/stage2_strategy_math_spec.ipynb` is the Stage 2 deliverable: the
+trend/momentum signal math (trend filter, vol-adjusted momentum score,
+selection with a turnover buffer, inverse-vol position sizing), justified,
+and validated against synthetic data. No production strategy code exists
+yet — that starts once the backtester (Stage 3) can validate this spec
+against real historical data. `research/_build_notebook.py` regenerates
+the notebook if it needs edits (`python _build_notebook.py`, then
+`jupyter nbconvert --to notebook --execute --inplace stage2_strategy_math_spec.ipynb`).
