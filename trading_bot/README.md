@@ -3,9 +3,9 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-3
-(scaffolding/config, strategy math spec, backtesting engine) are done.**
-Stages 4-12 are not implemented yet.
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-4
+(scaffolding/config, strategy math spec, backtesting engine, risk engine)
+are done.** Stages 5-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -16,6 +16,13 @@ Stages 4-12 are not implemented yet.
   `app/startup.py`.
 - No secrets are hardcoded or logged. All credentials come from `.env`
   (see `.env.example`), which is git-ignored.
+- The Risk Engine (`app/risk/`) can veto or clip any trade the Strategy
+  proposes. No config flag, order metadata, or "confidence" field can
+  override it — see `tests/test_risk_engine_never_overridden.py`.
+- No martingale/doubling down: refusing to add to a position already
+  underwater past a configured threshold. No leverage unless
+  `ALLOW_LEVERAGE=true` is set explicitly, and even then capped at
+  `MAX_LEVERAGE`. Never shorts (long-only, no exceptions).
 
 ## Setup
 
@@ -89,3 +96,39 @@ Stage 9 scope, not Stage 3.
 
 No real market data is used yet anywhere in this repo -- everything above
 runs on synthetic data with known, designed-in properties.
+
+## Risk Engine (Stage 4)
+
+`app/risk/` is a separate, dependency-free module (no imports of
+app.config, app.strategy, or anything else in the app) so it can be
+unit-tested in complete isolation, per the project's build order. It is
+the mandatory gate every proposed order passes through:
+
+- **Position limits** — clips a buy that would push a symbol over
+  `MAX_POSITION_PCT` of equity; fully vetoes if already at/above the cap.
+- **No leverage unless enabled** — gross exposure capped at 100% of equity
+  unless `ALLOW_LEVERAGE=true`, in which case it's still capped at
+  `MAX_LEVERAGE`.
+- **Never shorts** — a sell can never exceed shares actually held.
+- **No martingale/doubling down** — refuses to add to a position already
+  underwater past `max_add_to_loser_pct` (`config/risk_limits.yaml`).
+  Never blocks opening a brand-new position.
+- **Daily/weekly loss limits and a drawdown kill switch** — once
+  breached, all new risk-increasing (buy) orders are blocked; sells
+  (risk-reducing) are always still allowed through.
+- **Correlation limits** — two positions correlated at or above
+  `max_correlation` can't jointly exceed `max_correlated_group_pct` of
+  equity (pairwise check, `config/risk_limits.yaml`).
+
+`RiskLimits` is built from two sources: the existing `.env`/`Settings`
+fields (position/loss/drawdown/leverage, established in Stage 1) merged
+with `config/risk_limits.yaml` (the new Stage 4 knobs: correlation and
+anti-martingale) via `app/risk/config.py`.
+
+`tests/test_risk_engine_never_overridden.py` is the load-bearing test for
+this stage: every veto/clip rule above is tested twice per scenario, once
+with a plain order and once with an order whose metadata claims maximal
+strategy confidence (including an explicit `override_requested: True`
+flag) — both must produce the identical outcome. This mechanically proves
+the "no exceptions, no overrides" rule rather than just asserting it in
+a docstring.
