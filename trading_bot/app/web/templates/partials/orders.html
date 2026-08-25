@@ -1,0 +1,24 @@
+<h2>Recent Orders</h2>
+{% if orders %}
+<table>
+    <thead>
+        <tr><th>Submitted</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Status</th><th>Filled</th><th>Avg Fill Price</th><th>Rejection Reason</th></tr>
+    </thead>
+    <tbody>
+        {% for o in orders %}
+        <tr>
+            <td>{{ o.submitted_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+            <td>{{ o.symbol }}</td>
+            <td>{{ o.side }}</td>
+            <td>{{ "%.4f"|format(o.qty) }}</td>
+            <td>{{ o.status }}</td>
+            <td>{{ "%.4f"|format(o.filled_qty) }}</td>
+            <td>{% if o.avg_fill_price %}${{ "%.2f"|format(o.avg_fill_price) }}{% else %}--{% endif %}</td>
+            <td>{{ o.rejection_reason or "--" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty">No orders submitted yet.</div>
+{% endif %}

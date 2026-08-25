@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Trading Bot Dashboard{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #0e1117;
+            --panel: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --green: #3fb950;
+            --red: #f85149;
+            --amber: #d29922;
+        }
+        * { box-sizing: border-box; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+            margin: 0;
+            padding: 24px;
+        }
+        h1 { font-size: 1.4rem; margin: 0 0 4px 0; }
+        .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 0.9rem; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+        }
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .panel h2 {
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            margin: 0 0 12px 0;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+        th { color: var(--muted); font-weight: 500; }
+        .stat { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.9rem; }
+        .stat .label { color: var(--muted); }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge.paper { background: #1f3a5f; color: #79c0ff; }
+        .badge.approval { background: #4d3800; color: var(--amber); }
+        .badge.live { background: #4c1a1a; color: var(--red); }
+        .badge.ok { background: #1a4d2e; color: var(--green); }
+        .badge.stale { background: #4d3800; color: var(--amber); }
+        .empty { color: var(--muted); font-style: italic; font-size: 0.85rem; }
+        .pnl-pos { color: var(--green); }
+        .pnl-neg { color: var(--red); }
+    </style>
+</head>
+<body>
+    <h1>Trading Bot Dashboard</h1>
+    <div class="subtitle">Read-only. No controls here can place, cancel, or modify a trade.</div>
+    {% block content %}{% endblock %}
+</body>
+</html>

@@ -3,10 +3,10 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-6
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-7
 (scaffolding/config, strategy math spec, backtesting engine, risk engine,
-paper broker simulator, trading engine) are done.** Stages 7-12 are not
-implemented yet.
+paper broker simulator, trading engine, dashboard) are done.** Stages
+8-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -52,6 +52,18 @@ will print an account/risk-limit banner and block on a typed confirmation.
 
 On Windows, `start_trader.bat` wraps this for use with NSSM (auto-start /
 auto-restart) — see the comment header in that file.
+
+## Dashboard
+
+Runs as its own process, separate from the trading loop, reading only
+the shared SQLite database:
+
+```powershell
+uvicorn app.web.main:app --reload
+```
+
+Then open http://127.0.0.1:8000/. Read-only — see the Dashboard section
+below.
 
 ## Test
 
@@ -100,6 +112,11 @@ poll fills) against synthetic data:
 ```powershell
 python scripts\run_trading_engine_demo.py
 ```
+
+`tests/test_web_routes.py::test_every_route_is_read_only` is the
+load-bearing test for Stage 7: it inspects the actual FastAPI route table
+and asserts nothing but GET (and the framework's own HEAD/OPTIONS) is
+ever registered, anywhere in the app.
 
 ## Research
 
@@ -235,3 +252,42 @@ unchanged from Stage 1 — running the Trading Engine for real needs a live
 price feed (Stage 9) and a scheduler (APScheduler, not yet wired in) to
 call it on a schedule. Everything above is proven with synthetic data via
 `scripts/run_trading_engine_demo.py` and the test suite.
+
+## Dashboard (Stage 7)
+
+`app/web/` is a **read-only** FastAPI + server-rendered HTML/HTMX
+dashboard, per the confirmed architecture. It runs as its own process,
+entirely separate from the Trading Engine, and only ever reads the shared
+SQLite database (WAL mode lets both processes touch it concurrently) —
+it never imports a live broker or engine instance.
+
+- **Every route is a GET.** There is no POST/PUT/PATCH/DELETE anywhere in
+  `app/web/main.py` — nothing on this dashboard can place, cancel, or
+  modify a trade, change a risk limit, or touch the trading mode.
+  `tests/test_web_routes.py::test_every_route_is_read_only` enforces this
+  by inspecting the actual FastAPI route table, not by convention.
+- **Panels**: system status (trading mode, last activity, stale-if->15min
+  since the last equity snapshot or order update), account (latest
+  equity/cash from the equity-snapshot log), positions, recent orders,
+  and the currently configured risk limits and strategy parameters.
+- **`app/web/data.py`** is a pure read layer — every function reads from
+  the database and shapes a view-model; none of them write anything. That
+  split is what makes "the dashboard never mutates trading state"
+  checkable by reading one file.
+- Live price and unrealized P&L are intentionally **not** shown yet —
+  there's no live market-data feed until Stage 9, and the dashboard would
+  rather show nothing than a fabricated number. It shows exactly what the
+  database actually has: quantity, average entry price, and cost basis.
+- HTMX auto-refreshes each panel (`hx-trigger="every 10s"`) via small
+  partial endpoints (`/partials/system`, `/partials/account`,
+  `/partials/positions`, `/partials/orders`) that return just that
+  panel's HTML fragment, loaded from a CDN — the dashboard needs internet
+  access on first paint (the machine it runs on already does, for pip/apt
+  installs).
+- Renders correctly on a completely empty database (before the Trading
+  Engine has ever run a cycle) — every panel has an explicit empty state
+  rather than crashing on missing data.
+
+Run it standalone (see **Dashboard** above) and open
+http://127.0.0.1:8000/ — no trading loop needs to be running for the
+dashboard to start; it just shows empty-state panels until one is.
