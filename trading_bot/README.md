@@ -3,9 +3,9 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stage 1
-(scaffolding, config, mode switch) and Stage 2 (strategy math spec) are
-done.** Stages 3-12 are not implemented yet.
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-3
+(scaffolding/config, strategy math spec, backtesting engine) are done.**
+Stages 4-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -52,13 +52,40 @@ pytest
 it asserts PAPER/APPROVAL never prompt, and LIVE mode refuses to proceed
 without the exact typed confirmation phrase.
 
+`tests/test_backtesting_no_lookahead.py` is the load-bearing test for
+Stage 3: two price histories identical up to a split date, then diverging
+wildly after it (a synthetic crash injected only in the future segment) —
+the backtest's pre-split trades and equity curve must be byte-identical
+between the two runs, proving nothing in the engine reads ahead.
+
+Run a demo backtest against synthetic data and print performance metrics:
+
+```powershell
+python scripts\run_backtest_demo.py
+```
+
 ## Research
 
 `research/stage2_strategy_math_spec.ipynb` is the Stage 2 deliverable: the
 trend/momentum signal math (trend filter, vol-adjusted momentum score,
 selection with a turnover buffer, inverse-vol position sizing), justified,
-and validated against synthetic data. No production strategy code exists
-yet — that starts once the backtester (Stage 3) can validate this spec
-against real historical data. `research/_build_notebook.py` regenerates
-the notebook if it needs edits (`python _build_notebook.py`, then
+and validated against synthetic data. `app/strategy/` is that same math
+ported into production code once Stage 3's backtester existed to validate
+it. `research/_build_notebook.py` regenerates the notebook if it needs
+edits (`python _build_notebook.py`, then
 `jupyter nbconvert --to notebook --execute --inplace stage2_strategy_math_spec.ipynb`).
+
+## Backtesting (Stage 3)
+
+`app/backtesting/` walks real NYSE trading sessions (`pandas_market_calendars`,
+never naive calendar-day math) one at a time. On each monthly rebalance
+date it computes signals using data through the *prior* session's close
+only, then executes at the rebalance date's *open* with configurable
+commission (`app/backtesting/costs.py`, defaults to Alpaca's real $0
+equities/ETF commission) and slippage (fixed bps against the trader by
+default). `app/market_data/` currently has a synthetic generator (tests
+and the demo script) and a CSV loader; a real historical-data adapter is
+Stage 9 scope, not Stage 3.
+
+No real market data is used yet anywhere in this repo -- everything above
+runs on synthetic data with known, designed-in properties.
