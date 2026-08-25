@@ -77,3 +77,4 @@ class AccountSnapshot:
     cash: float
     equity: float
     buying_power: float
+    account_id: str | None = None

@@ -3,10 +3,10 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-8
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-9
 (scaffolding/config, strategy math spec, backtesting engine, risk engine,
-paper broker simulator, trading engine, dashboard, monitoring & alerts)
-are done.** Stages 9-12 are not implemented yet.
+paper broker simulator, trading engine, dashboard, monitoring & alerts,
+real Alpaca adapter) are done.** Stages 10-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -124,6 +124,20 @@ watching — `AlertManager.notify()` swallows every sink exception (even
 when *every* sink is broken), and the crash-restart watchdog keeps
 restarting a repeatedly-crashing target even when the act of alerting
 about each crash itself blows up.
+
+`tests/test_broker_alpaca.py::test_submit_order_non_api_error_propagates_never_fabricates_rejection`
+is the load-bearing test for Stage 9: only Alpaca's own `APIError` (a
+definitive broker verdict) may be converted into a locally-recorded
+REJECTED order — a network failure, timeout, or any other exception must
+propagate uncaught rather than being silently guessed at.
+
+Run the (real-network, non-deterministic, not part of the test suite)
+Alpaca paper-account sanity check — requires real credentials in `.env`:
+
+```powershell
+python scripts\run_alpaca_broker_demo.py
+python scripts\run_alpaca_broker_demo.py --submit-test-order AAPL
+```
 
 ## Research
 
@@ -339,3 +353,49 @@ propagate back into the trading loop they're watching:
 
 Configure `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and
 `HEARTBEAT_STALE_SECONDS` in `.env` (see `.env.example`).
+
+## Real Alpaca adapter (Stage 9)
+
+`app/broker/alpaca.py`'s `AlpacaBroker` implements the exact same
+interface as the Stage 5 `PaperBroker` simulator (`submit_order`,
+`advance_time`, `cancel_order`, `get_order`, `get_positions`,
+`get_account`) — so `TradingEngine`, `OrderManager`, `Portfolio`, and
+startup reconciliation all work completely unchanged whether they're
+wired to the local simulator (used by tests and the demo scripts) or this
+class talking to real Alpaca. Per the confirmed architecture, **PAPER and
+LIVE trading run through this identical class** — `app/broker/factory.py`
+is the one place that decides which Alpaca endpoint an instance points
+at, driven entirely by `settings.trading_mode` (`Settings.alpaca_base_url`,
+already established in Stage 1).
+
+- The adapter depends on alpaca-py's `TradingClient` through a narrow
+  `AlpacaTradingClient` Protocol, so every test fakes it completely — no
+  real network calls, no real credentials, anywhere in the test suite.
+- **Only Alpaca's own `APIError`** (a definitive "the broker refused this
+  order" answer — bad symbol, insufficient buying power, market closed,
+  etc.) is converted into a locally-recorded `REJECTED` order. Any other
+  exception (a network timeout, a dropped connection, a 5xx) is left to
+  propagate uncaught rather than being silently guessed at — an unknown
+  outcome must surface as a crash for Stage 8's watchdog to alert on and
+  retry, never as a fabricated verdict that could hide a real order or
+  invite a double-submit on retry.
+- `get_order()` translates a 404-style `APIError` into a `KeyError`, so
+  `app/database/reconciliation.py`'s "this order is unknown to the
+  broker" branch works identically for both brokers.
+- Alpaca's order status has many more in-flight states than our own
+  `OrderStatus`; anything not explicitly recognized defaults to `NEW`
+  (still open) rather than being mistaken for filled or canceled in
+  either direction.
+- Alpaca's REST responses return numeric fields (`qty`, `cash`, `equity`,
+  ...) as strings; every one is explicitly `float()`'d crossing into our
+  domain models (`BrokerPosition`, `AccountSnapshot`, `Order`).
+- `AccountSnapshot` gained an `account_id` field. `app/main.py`'s LIVE-mode
+  path now fetches a **real** account snapshot before ever showing the
+  typed-confirmation banner — a gap flagged since Stage 1, when
+  `account_snapshot` was always `None` because no broker adapter existed
+  to ask. If the broker can't be reached, startup now aborts *before* the
+  banner is shown, rather than proceeding with "UNKNOWN" placeholders.
+- Full scheduler / live rebalance-loop wiring (calling
+  `TradingEngine.run_rebalance_cycle` on a schedule against real market
+  data) is deliberately deferred to Stage 11 — this stage is the adapter
+  itself, proven correct in isolation.
