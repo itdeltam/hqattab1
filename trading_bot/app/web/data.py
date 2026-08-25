@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.models import EquitySnapshot, OrderRecord, PositionRecord
+from app.monitoring.heartbeat import DEFAULT_HEARTBEAT_COMPONENT, get_heartbeat, is_stale
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,8 @@ class SystemStatus:
     trading_mode: str
     last_activity: datetime | None
     seconds_since_activity: float | None
+    last_heartbeat: datetime | None
+    heartbeat_healthy: bool
 
 
 def get_account_summary(session: Session) -> AccountSummary:
@@ -68,7 +71,12 @@ def get_recent_orders(session: Session, limit: int = 20) -> list[OrderRecord]:
     ).all())
 
 
-def get_system_status(session: Session, trading_mode: str, now: datetime) -> SystemStatus:
+def get_system_status(
+    session: Session,
+    trading_mode: str,
+    now: datetime,
+    heartbeat_stale_seconds: float = 120.0,
+) -> SystemStatus:
     latest_equity = session.scalars(
         select(EquitySnapshot.timestamp).order_by(EquitySnapshot.timestamp.desc()).limit(1)
     ).first()
@@ -80,4 +88,18 @@ def get_system_status(session: Session, trading_mode: str, now: datetime) -> Sys
     last_activity = max(candidates) if candidates else None
     seconds_since = (now - last_activity).total_seconds() if last_activity else None
 
-    return SystemStatus(trading_mode=trading_mode, last_activity=last_activity, seconds_since_activity=seconds_since)
+    # Heartbeat is a separate liveness signal from "traded activity" -- it
+    # should keep landing on days the strategy does nothing (market closed,
+    # nothing eligible), so it can tell "alive but idle" apart from
+    # "crashed or hung" in a way last_activity alone cannot.
+    heartbeat_record = get_heartbeat(session, DEFAULT_HEARTBEAT_COMPONENT)
+    last_heartbeat = heartbeat_record.last_beat_at if heartbeat_record else None
+    heartbeat_healthy = not is_stale(last_heartbeat, now, heartbeat_stale_seconds)
+
+    return SystemStatus(
+        trading_mode=trading_mode,
+        last_activity=last_activity,
+        seconds_since_activity=seconds_since,
+        last_heartbeat=last_heartbeat,
+        heartbeat_healthy=heartbeat_healthy,
+    )

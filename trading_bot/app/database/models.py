@@ -52,3 +52,18 @@ class EquitySnapshot(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime)
     equity: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
+
+
+class HeartbeatRecord(Base):
+    """One row per monitored component, upserted in place (unlike
+    EquitySnapshot, we only care about the *latest* beat, not history).
+    This is a liveness signal, separate from trading activity -- a
+    heartbeat should keep landing even on a day the strategy makes no
+    trades (market closed, nothing eligible, etc.), so the dashboard can
+    tell "engine alive, just idle" apart from "engine crashed"."""
+
+    __tablename__ = "heartbeats"
+
+    component: Mapped[str] = mapped_column(String, primary_key=True)
+    last_beat_at: Mapped[datetime] = mapped_column(DateTime)
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)

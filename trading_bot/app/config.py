@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     allow_leverage: bool = Field(default=False)
     max_leverage: float = Field(default=1.0, ge=1.0)
 
+    # --- Monitoring ---
+    heartbeat_stale_seconds: float = Field(default=120.0, gt=0)
+
     # --- Logging ---
     log_level: str = Field(default="INFO")
 

@@ -19,3 +19,19 @@
 {% else %}
 <div class="empty">No activity recorded yet -- the trading engine hasn't run a cycle.</div>
 {% endif %}
+{% if status.last_heartbeat %}
+<div class="stat">
+    <span class="label">Last heartbeat</span>
+    <span>{{ status.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+</div>
+<div class="stat">
+    <span class="label">Heartbeat</span>
+    {% if status.heartbeat_healthy %}
+    <span class="badge ok">ALIVE</span>
+    {% else %}
+    <span class="badge stale">STALE</span>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty">No heartbeat recorded yet -- the trading engine hasn't started.</div>
+{% endif %}

@@ -33,7 +33,7 @@ def dashboard(request: Request, session: Session = Depends(get_session)):
     settings = get_settings()
     now = datetime.now()
     return templates.TemplateResponse(request, "dashboard.html", {
-        "status": get_system_status(session, settings.trading_mode.value, now),
+        "status": get_system_status(session, settings.trading_mode.value, now, settings.heartbeat_stale_seconds),
         "account": get_account_summary(session),
         "positions": get_positions_view(session),
         "orders": get_recent_orders(session),
@@ -45,7 +45,9 @@ def dashboard(request: Request, session: Session = Depends(get_session)):
 @app.get("/partials/system")
 def partial_system(request: Request, session: Session = Depends(get_session)):
     settings = get_settings()
-    status = get_system_status(session, settings.trading_mode.value, datetime.now())
+    status = get_system_status(
+        session, settings.trading_mode.value, datetime.now(), settings.heartbeat_stale_seconds,
+    )
     return templates.TemplateResponse(request, "partials/system.html", {"status": status})
 
 

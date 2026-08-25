@@ -21,10 +21,13 @@ from typing import Callable
 import pandas as pd
 from sqlalchemy.orm import Session
 
+from app.alerts.events import AlertEvent, Severity
+from app.alerts.manager import AlertManager
 from app.broker.models import Order
 from app.broker.paper import PaperBroker
 from app.database.reconciliation import ReconciliationReport, reconcile_startup_state
 from app.execution.order_manager import OrderManager
+from app.monitoring.heartbeat import DEFAULT_HEARTBEAT_COMPONENT, record_heartbeat
 from app.portfolio.portfolio import Portfolio
 from app.risk.engine import RiskEngine
 from app.risk.models import ProposedOrder, RiskDecision
@@ -51,6 +54,8 @@ class TradingEngine:
     risk_engine: RiskEngine
     strategy_params: StrategyParams
     price_lookup: PriceLookup
+    alert_manager: AlertManager = field(default_factory=lambda: AlertManager(sinks=[]))
+    heartbeat_component: str = DEFAULT_HEARTBEAT_COMPONENT
     portfolio: Portfolio = field(init=False)
     order_manager: OrderManager = field(init=False)
 
@@ -58,10 +63,30 @@ class TradingEngine:
         self.portfolio = Portfolio(self.broker, self.session, self.price_lookup)
         self.order_manager = OrderManager(self.broker, self.session)
 
+    def heartbeat(self, now: datetime) -> None:
+        """Records liveness independent of whether a rebalance cycle ran.
+        Intended to be called on a tight, fixed cadence (e.g. every
+        scheduler tick) by whatever runs this engine, so the dashboard can
+        tell "alive but idle" apart from "crashed or hung" (see
+        app/monitoring/heartbeat.py)."""
+        record_heartbeat(self.session, self.heartbeat_component, now)
+
     def reconcile_on_startup(self, now: datetime) -> ReconciliationReport:
         """Must be called once, before run_rebalance_cycle is ever called.
-        Broker state overwrites local DB state unconditionally."""
-        return reconcile_startup_state(self.broker, self.session, now)
+        Broker state overwrites local DB state unconditionally. Any
+        discrepancy found is surfaced as an alert -- it means local state
+        drifted from broker truth (e.g. a crash mid-cycle), which is worth
+        a human's attention even though it self-heals automatically."""
+        report = reconcile_startup_state(self.broker, self.session, now)
+        self.heartbeat(now)
+        if not report.is_clean:
+            self.alert_manager.notify(AlertEvent(
+                severity=Severity.WARNING,
+                title="Startup reconciliation found discrepancies",
+                detail="; ".join(report.discrepancies),
+                timestamp=now,
+            ))
+        return report
 
     def poll_fills(self, now: datetime) -> list[Order]:
         return self.order_manager.poll_fills(now)
@@ -82,6 +107,7 @@ class TradingEngine:
         """
         params = self.strategy_params
 
+        self.heartbeat(now)
         self.portfolio.record_equity_snapshot(now)
         portfolio_state = self.portfolio.current_state(now, correlations=correlations)
 

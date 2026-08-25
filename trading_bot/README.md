@@ -3,10 +3,10 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-7
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-8
 (scaffolding/config, strategy math spec, backtesting engine, risk engine,
-paper broker simulator, trading engine, dashboard) are done.** Stages
-8-12 are not implemented yet.
+paper broker simulator, trading engine, dashboard, monitoring & alerts)
+are done.** Stages 9-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -117,6 +117,13 @@ python scripts\run_trading_engine_demo.py
 load-bearing test for Stage 7: it inspects the actual FastAPI route table
 and asserts nothing but GET (and the framework's own HEAD/OPTIONS) is
 ever registered, anywhere in the app.
+
+`tests/test_alerts_never_crash_the_caller.py` is the load-bearing test
+suite for Stage 8: it proves alerting can never take down the loop it's
+watching — `AlertManager.notify()` swallows every sink exception (even
+when *every* sink is broken), and the crash-restart watchdog keeps
+restarting a repeatedly-crashing target even when the act of alerting
+about each crash itself blows up.
 
 ## Research
 
@@ -291,3 +298,44 @@ it never imports a live broker or engine instance.
 Run it standalone (see **Dashboard** above) and open
 http://127.0.0.1:8000/ — no trading loop needs to be running for the
 dashboard to start; it just shows empty-state panels until one is.
+
+## Monitoring & alerts (Stage 8)
+
+Two separate concerns, both designed so a failure in either can never
+propagate back into the trading loop they're watching:
+
+- **Heartbeat** (`app/monitoring/heartbeat.py`) is a liveness signal,
+  deliberately kept separate from *trading* activity. `TradingEngine`
+  records a heartbeat on startup reconciliation and on every rebalance
+  cycle; a future scheduler (Stage 9) is expected to call
+  `TradingEngine.heartbeat(now)` on a tight, fixed cadence (e.g. every
+  60s) independent of whether a rebalance actually happened — that's what
+  lets the dashboard tell "engine alive, just idle" (market closed,
+  nothing eligible to trade) apart from "engine crashed or hung."
+  `HeartbeatMonitor` polls this and fires alerts **only on state
+  transitions** (going stale, and recovering) — never once per poll,
+  which would just get a channel muted. The dashboard's System panel now
+  shows both "Last activity" (existing, trade/equity-based) and "Last
+  heartbeat" (new, liveness-based) side by side.
+- **Crash-restart** (`app/monitoring/watchdog.py`) is an in-process
+  supervisor: `run_with_restart()` calls a target callable in a loop and
+  restarts it on any exception, with exponential backoff (capped), up to
+  an optional `max_restarts` before giving up and re-raising. This is a
+  second line of defense *underneath* the OS-level one (NSSM, per the
+  Windows deployment plan) — NSSM restarts the whole process if it dies
+  outright; this catches a single bad cycle inside a long-running loop so
+  a transient fault doesn't take the whole process down.
+- **Telegram** (`app/alerts/telegram.py`) is the delivery channel:
+  `TelegramNotifier.send()` never raises — a missing/wrong bot token, no
+  network, or Telegram being down all just return `False` instead of
+  crashing whatever called it. Not configuring `TELEGRAM_BOT_TOKEN` /
+  `TELEGRAM_CHAT_ID` is treated as "alerts not configured," not an error.
+  `AlertManager` (`app/alerts/manager.py`) fans an event out to every
+  configured sink and always logs, independent of delivery success.
+- Startup reconciliation (`app/database/reconciliation.py`) now feeds
+  `AlertManager` directly: any discrepancy found between local DB state
+  and broker truth fires a `WARNING` alert (self-healing happens either
+  way — broker always wins — but a human should know it happened).
+
+Configure `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and
+`HEARTBEAT_STALE_SECONDS` in `.env` (see `.env.example`).

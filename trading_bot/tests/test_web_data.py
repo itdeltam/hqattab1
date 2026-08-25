@@ -5,6 +5,7 @@ import pytest
 from app.database.models import OrderRecord, PositionRecord
 from app.database.repository import record_equity_snapshot
 from app.database.session import create_db_engine, make_session_factory
+from app.monitoring.heartbeat import record_heartbeat
 from app.web.data import get_account_summary, get_positions_view, get_recent_orders, get_system_status
 
 NOW = datetime(2024, 1, 2, 9, 30)
@@ -72,6 +73,8 @@ def test_system_status_no_activity_yet(session):
     assert status.trading_mode == "PAPER"
     assert status.last_activity is None
     assert status.seconds_since_activity is None
+    assert status.last_heartbeat is None
+    assert status.heartbeat_healthy is False
 
 
 def test_system_status_reflects_most_recent_of_equity_or_order_activity(session):
@@ -87,3 +90,21 @@ def test_system_status_reflects_most_recent_of_equity_or_order_activity(session)
 
     assert status.last_activity == NOW + timedelta(minutes=10)
     assert status.seconds_since_activity == pytest.approx(300.0)
+
+
+def test_system_status_heartbeat_healthy_within_threshold(session):
+    record_heartbeat(session, "trading_engine", NOW)
+
+    status = get_system_status(session, "PAPER", NOW + timedelta(seconds=30), heartbeat_stale_seconds=120)
+
+    assert status.last_heartbeat == NOW
+    assert status.heartbeat_healthy is True
+
+
+def test_system_status_heartbeat_stale_past_threshold(session):
+    record_heartbeat(session, "trading_engine", NOW)
+
+    status = get_system_status(session, "PAPER", NOW + timedelta(seconds=300), heartbeat_stale_seconds=120)
+
+    assert status.last_heartbeat == NOW
+    assert status.heartbeat_healthy is False

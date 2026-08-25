@@ -9,15 +9,27 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytest
 
+from app.alerts.events import Severity
+from app.alerts.manager import AlertManager
 from app.backtesting.costs import FixedBpsSlippage
 from app.broker.paper import PaperBroker
 from app.database.models import PositionRecord
 from app.database.session import create_db_engine, make_session_factory
 from app.market_data.synthetic import trending_series
+from app.monitoring.heartbeat import get_heartbeat
 from app.risk.engine import RiskEngine
 from app.risk.limits import RiskLimits
 from app.strategy.params import StrategyParams
 from app.trading_engine import TradingEngine
+
+
+class RecordingSink:
+    def __init__(self):
+        self.events = []
+
+    def send(self, event):
+        self.events.append(event)
+        return True
 
 SPECS = {
     "UP": dict(annual_drift=0.25, annual_vol=0.12, seed=1),
@@ -54,7 +66,7 @@ def current_prices(price_history):
     return {sym: float(latest[sym]) for sym in price_history.columns}
 
 
-def make_engine(session, price_history, current_prices, limits=None, starting_cash=100_000.0):
+def make_engine(session, price_history, current_prices, limits=None, starting_cash=100_000.0, alert_manager=None):
     broker = PaperBroker(
         starting_cash=starting_cash,
         price_lookup=lambda s: current_prices.get(s),
@@ -62,9 +74,13 @@ def make_engine(session, price_history, current_prices, limits=None, starting_ca
     )
     params = StrategyParams(top_k=1, rank_buffer=1, defensive_asset="SHY")
     risk_engine = RiskEngine(limits or RiskLimits(max_position_pct=1.0))
+    kwargs = {}
+    if alert_manager is not None:
+        kwargs["alert_manager"] = alert_manager
     return TradingEngine(
         broker=broker, session=session, risk_engine=risk_engine,
         strategy_params=params, price_lookup=lambda s: current_prices.get(s),
+        **kwargs,
     ), broker
 
 
@@ -154,3 +170,38 @@ def test_equity_snapshot_recorded_on_every_cycle(session, price_history, current
     engine.run_rebalance_cycle(now, price_history, current_prices)
 
     assert repository.get_day_start_equity(session, now) == pytest.approx(100_000.0)
+
+
+def test_reconciliation_discrepancy_triggers_an_alert(session, price_history, current_prices, now):
+    sink = RecordingSink()
+    engine, broker = make_engine(session, price_history, current_prices, alert_manager=AlertManager([sink]))
+
+    # Seed the DB with stale state the broker knows nothing about.
+    session.add(PositionRecord(symbol="GHOST", qty=500, avg_entry_price=1.0, updated_at=now))
+    session.commit()
+
+    engine.reconcile_on_startup(now)
+
+    assert len(sink.events) == 1
+    assert sink.events[0].severity == Severity.WARNING
+    assert "GHOST" in sink.events[0].detail
+
+
+def test_clean_reconciliation_does_not_alert(session, price_history, current_prices, now):
+    sink = RecordingSink()
+    engine, broker = make_engine(session, price_history, current_prices, alert_manager=AlertManager([sink]))
+
+    engine.reconcile_on_startup(now)
+
+    assert sink.events == []
+
+
+def test_heartbeat_recorded_on_startup_and_every_rebalance_cycle(session, price_history, current_prices, now):
+    engine, broker = make_engine(session, price_history, current_prices)
+
+    engine.reconcile_on_startup(now)
+    assert get_heartbeat(session, "trading_engine").last_beat_at == now
+
+    later = now + timedelta(minutes=5)
+    engine.run_rebalance_cycle(later, price_history, current_prices)
+    assert get_heartbeat(session, "trading_engine").last_beat_at == later
