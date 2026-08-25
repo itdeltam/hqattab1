@@ -3,9 +3,10 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-5
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-6
 (scaffolding/config, strategy math spec, backtesting engine, risk engine,
-paper broker simulator) are done.** Stages 6-12 are not implemented yet.
+paper broker simulator, trading engine) are done.** Stages 7-12 are not
+implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -23,6 +24,9 @@ paper broker simulator) are done.** Stages 6-12 are not implemented yet.
   underwater past a configured threshold. No leverage unless
   `ALLOW_LEVERAGE=true` is set explicitly, and even then capped at
   `MAX_LEVERAGE`. Never shorts (long-only, no exceptions).
+- On every startup, local DB state is reconciled against the broker's
+  actual account/positions/orders before any trading is allowed. Broker
+  state is always authoritative — see `app/database/reconciliation.py`.
 
 ## Setup
 
@@ -82,6 +86,19 @@ latency, sell, final account state):
 
 ```powershell
 python scripts\run_paper_broker_demo.py
+```
+
+`tests/test_trading_engine_integration.py` is the load-bearing test suite
+for Stage 6: it proves an absurdly tight position cap results in the
+Risk Engine fully vetoing every proposed order and `submitted_orders`
+staying empty — there's no code path from a Strategy decision to the
+broker that skips risk evaluation.
+
+Run a demo full-cycle trade (reconcile, propose, risk-check, submit,
+poll fills) against synthetic data:
+
+```powershell
+python scripts\run_trading_engine_demo.py
 ```
 
 ## Research
@@ -175,3 +192,46 @@ backtester.
 - Fill prices reuse `app/backtesting/costs.py`'s `SlippageModel` --
   the same cost model backtests already use, applied at whatever price is
   current *at fill time*, not at submission time.
+
+## Trading Engine (Stage 6)
+
+`app/trading_engine.py` wires everything built so far into one cycle:
+**Strategy → Portfolio → Risk Engine → Order Manager → Broker**, with
+mandatory startup reconciliation. Every new piece this stage added:
+
+- **`app/database/`** — SQLAlchemy models + SQLite WAL setup. The database
+  is a *mirror* of broker truth, never an independent ledger: positions
+  and orders are always overwritten from what the broker reports, so
+  local state can never drift out of sync with the account that actually
+  holds the money. What it uniquely owns is history — an append-only
+  equity-snapshot log, which is how day-start/week-start/peak equity
+  survive an app restart for the Risk Engine's loss-limit and drawdown
+  checks.
+- **`app/database/reconciliation.py`** — `reconcile_startup_state()`:
+  overwrites local positions from `broker.get_positions()` wholesale, and
+  re-syncs any DB-tracked open order against `broker.get_order()`
+  individually (the paper broker has no bulk order listing yet; a real
+  Alpaca adapter's bulk listing in Stage 9 slots into the same function
+  without changing this contract). Every mismatch found is logged as a
+  discrepancy, not silently corrected.
+- **`app/portfolio/`** — builds the Risk Engine's `PortfolioState`
+  snapshot by reading the broker fresh every time (never its own cached
+  ledger) plus the DB's equity history.
+- **`app/execution/`** — `OrderManager` submits Risk-Engine-approved
+  orders to the broker and keeps DB order records in sync; never retries
+  a rejected order on its own.
+- **`app/strategy/rebalancing.py`** — the target-weight and order-sizing
+  math, extracted out of the backtester (Stage 3) so both it and the
+  Trading Engine call the identical, single-sourced logic instead of two
+  copies that could quietly diverge.
+
+The current momentum-sleeve holdings used for the selection buffer
+(Stage 2's turnover-reduction rule) are derived from actual broker
+positions each cycle, not tracked as separate state — one less ledger
+that could disagree with reality.
+
+No real market data or scheduling exists yet, so `app/main.py` is
+unchanged from Stage 1 — running the Trading Engine for real needs a live
+price feed (Stage 9) and a scheduler (APScheduler, not yet wired in) to
+call it on a schedule. Everything above is proven with synthetic data via
+`scripts/run_trading_engine_demo.py` and the test suite.

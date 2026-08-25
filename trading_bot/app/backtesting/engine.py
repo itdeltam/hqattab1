@@ -15,11 +15,8 @@ import pandas as pd
 from app.backtesting.costs import CommissionModel, FixedBpsSlippage, SlippageModel, ZeroCommission
 from app.market_data.bars import PriceHistory
 from app.strategy.params import StrategyParams
-from app.strategy.selection import select_with_buffer
+from app.strategy.rebalancing import compute_order_deltas, compute_target_weights
 from app.strategy.signals import momentum_score, realized_vol, trend_filter
-from app.strategy.sizing import inverse_vol_weights
-
-MIN_TRADE_VALUE = 1.00  # skip dust trades below this notional
 
 
 @dataclass(frozen=True)
@@ -106,41 +103,17 @@ class BacktestEngine:
         params: StrategyParams,
         trades: list[Trade],
     ) -> tuple[float, dict[str, float], set[str]]:
-        # trend_filter needs fewer days of history than momentum_score does
-        # (the momentum skip adds a few extra days on top). In that narrow
-        # window an asset can be trend-eligible with a still-NaN score;
-        # pandas' sort_values() sorts NaN last but does not drop it, so an
-        # asset with an undefined rank could otherwise still get selected.
-        # Require both explicitly so "eligible" always means "rankable".
-        rankable = eligible_prior & scores_prior.notna()
-        selected = select_with_buffer(scores_prior, rankable, momentum_holdings, params)
-        # Only assets with a valid (non-NaN) vol estimate can be sized.
-        selected = {s for s in selected if pd.notna(vols_prior.get(s))}
-
-        sleeve_frac = len(selected) / params.top_k if params.top_k else 0.0
-        weights: dict[str, float] = {}
-        if selected:
-            inv_weights = inverse_vol_weights(vols_prior[list(selected)])
-            for symbol in selected:
-                weights[symbol] = inv_weights[symbol] * sleeve_frac
-
-        defensive = params.defensive_asset
-        weights[defensive] = weights.get(defensive, 0.0) + (1.0 - sleeve_frac)
+        weights, selected = compute_target_weights(eligible_prior, scores_prior, vols_prior, momentum_holdings, params)
 
         current_equity = cash + sum(
             shares[symbol] * reference_prices[symbol] for symbol in shares
         )
 
-        for symbol in shares:
-            target_weight = weights.get(symbol, 0.0)
-            target_dollars = target_weight * current_equity
-            target_shares = target_dollars / reference_prices[symbol]
-            delta = target_shares - shares[symbol]
+        deltas = compute_order_deltas(weights, shares, reference_prices, current_equity)
 
+        for symbol, delta in deltas.items():
             fill_price_raw = fill_prices[symbol]
-            if delta == 0 or pd.isna(fill_price_raw):
-                continue
-            if abs(delta) * fill_price_raw < MIN_TRADE_VALUE:
+            if pd.isna(fill_price_raw):
                 continue
 
             side = "buy" if delta > 0 else "sell"
@@ -149,7 +122,7 @@ class BacktestEngine:
 
             cash -= delta * fill_price
             cash -= commission
-            shares[symbol] = target_shares
+            shares[symbol] += delta
 
             trades.append(Trade(
                 date=date, symbol=symbol, side=side,
