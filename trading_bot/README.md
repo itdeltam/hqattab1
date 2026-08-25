@@ -3,9 +3,9 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-4
-(scaffolding/config, strategy math spec, backtesting engine, risk engine)
-are done.** Stages 5-12 are not implemented yet.
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-5
+(scaffolding/config, strategy math spec, backtesting engine, risk engine,
+paper broker simulator) are done.** Stages 6-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -65,10 +65,23 @@ wildly after it (a synthetic crash injected only in the future segment) —
 the backtest's pre-split trades and equity curve must be byte-identical
 between the two runs, proving nothing in the engine reads ahead.
 
+`tests/test_broker_latency.py` and `tests/test_broker_partial_fills.py`
+are the load-bearing tests for Stage 5: latency delays fills until the
+scheduled time (never early, using the price *at fill time* not submit
+time), and partial fills accumulate correctly toward the original order
+quantity with a properly weighted average fill price.
+
 Run a demo backtest against synthetic data and print performance metrics:
 
 ```powershell
 python scripts\run_backtest_demo.py
+```
+
+Run a demo paper-broker order lifecycle (submit, partial fills over time,
+latency, sell, final account state):
+
+```powershell
+python scripts\run_paper_broker_demo.py
 ```
 
 ## Research
@@ -132,3 +145,33 @@ strategy confidence (including an explicit `override_requested: True`
 flag) — both must produce the identical outcome. This mechanically proves
 the "no exceptions, no overrides" rule rather than just asserting it in
 a docstring.
+
+## Paper Broker Simulator (Stage 5)
+
+`app/broker/` is a fully offline, deterministic (given a seed) simulator
+-- no network, no real Alpaca connection. It exists so the Trading Engine
+(Stage 6) can be built and tested against a realistic broker contract
+before any real broker integration exists (Stage 9). It never reads the
+wall clock -- every call takes an explicit `now`, exactly like the
+backtester.
+
+- **Rejections** happen synchronously at submission: invalid quantity, no
+  market data for the symbol, insufficient buying power, or a sell that
+  would exceed shares held (this system never shorts -- a second,
+  broker-level backstop behind the Risk Engine's own check).
+- **Fills never happen inside `submit_order`.** An accepted order sits at
+  `NEW` until the caller calls `advance_time(now)`, which resolves any
+  order whose scheduled fill time has arrived -- modeling a real broker's
+  asynchronous acknowledge-then-fill flow instead of an instant fill that
+  would go untested until Stage 9.
+- **Latency** (`app/broker/latency.py`) controls how long an order waits
+  before its first fill attempt: `ZeroLatency`, `FixedLatency`, or
+  `RandomLatency` (seeded, so tests stay deterministic).
+- **Partial fills** (`app/broker/fills.py`) control how much of the
+  remainder fills per attempt: `FullFillModel` (default) or
+  `PartialFillModel`/`RandomPartialFillModel`, which fill a fraction of
+  what's left each attempt and finish off the remainder once it drops
+  below a configurable dust threshold, rather than shrinking forever.
+- Fill prices reuse `app/backtesting/costs.py`'s `SlippageModel` --
+  the same cost model backtests already use, applied at whatever price is
+  current *at fill time*, not at submission time.
