@@ -3,13 +3,14 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages
-1-11 (scaffolding/config, strategy math spec, backtesting engine, risk
-engine, paper broker simulator, trading engine, dashboard, monitoring &
-alerts, real Alpaca adapter, security & failure testing, extended
-paper-trading deployment against live market data) are done.** Stage 12
-(live-trading readiness checklist) is not implemented yet -- that one is
-a decision for you, not code.
+Built stage by stage; see `BUILD ORDER` in the project brief. **All 12
+stages are done** (scaffolding/config, strategy math spec, backtesting
+engine, risk engine, paper broker simulator, trading engine, dashboard,
+monitoring & alerts, real Alpaca adapter, security & failure testing,
+extended paper-trading deployment against live market data, and the
+live-trading readiness checklist). Stage 12 is deliberately not code —
+see [`LIVE_TRADING_CHECKLIST.md`](LIVE_TRADING_CHECKLIST.md) before ever
+setting `TRADING_MODE=LIVE`.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -563,4 +564,21 @@ decide *when* it's safe to point at a real Alpaca paper account and leave
 it running unattended for days, or what "extended" should mean in
 practice (how long, what to watch, when to call it validated). That
 judgment, and Stage 12's live-trading readiness checklist, are yours.
+
+## Live-trading readiness checklist (Stage 12)
+
+[`LIVE_TRADING_CHECKLIST.md`](LIVE_TRADING_CHECKLIST.md) is the final
+deliverable of the build order, and it is deliberately not code — every
+other stage produced a module and a test suite; this one is a decision
+document. It covers: replacing the placeholder risk/capital numbers that
+have been flagged as unresolved since Stage 1, verifying live credentials
+and alerting without risking a real order, what to look for in an
+extended paper-trading track record before trusting it, operational and
+kill-switch readiness, an explicit list of what this system does **not**
+do, and everything outside this codebase's scope entirely (legal, tax,
+personal risk tolerance).
+
+Nothing in this repository will ever set `TRADING_MODE=LIVE` or type the
+`ENABLE LIVE TRADING` confirmation phrase on your behalf. That decision,
+and the judgment behind it, is yours alone.
 use the framework's default autoescaping (no `|safe` filters anywhere).
