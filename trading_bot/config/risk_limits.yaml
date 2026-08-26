@@ -1,0 +1,16 @@
+# Structured, non-secret risk-tuning knobs. Position/loss/drawdown/leverage
+# limits live in .env (STARTING_CAPITAL, MAX_DAILY_LOSS_PCT, etc. -- see
+# .env.example) since they were established in Stage 1; this file adds the
+# Stage 4 knobs that don't have an obvious home in the secrets-oriented .env.
+#
+# Loaded by app/risk/config.py, merged with the .env-sourced limits into a
+# single RiskLimits object.
+
+# Correlation limit: no two positions with pairwise correlation at or above
+# max_correlation may together exceed max_correlated_group_pct of equity.
+max_correlation: 0.70
+max_correlated_group_pct: 0.25
+
+# Anti-martingale: refuse to add to a position already underwater by more
+# than this fraction. Never blocks opening a brand-new position.
+max_add_to_loser_pct: 0.05

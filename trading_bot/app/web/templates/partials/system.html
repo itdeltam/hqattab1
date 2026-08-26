@@ -1,0 +1,37 @@
+<h2>System</h2>
+<div class="stat">
+    <span class="label">Mode</span>
+    <span class="badge {{ status.trading_mode|lower }}">{{ status.trading_mode }}</span>
+</div>
+{% if status.last_activity %}
+<div class="stat">
+    <span class="label">Last activity</span>
+    <span>{{ status.last_activity.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+</div>
+<div class="stat">
+    <span class="label">Status</span>
+    {% if status.seconds_since_activity < 900 %}
+    <span class="badge ok">ACTIVE</span>
+    {% else %}
+    <span class="badge stale">STALE ({{ (status.seconds_since_activity // 60)|int }} min)</span>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty">No activity recorded yet -- the trading engine hasn't run a cycle.</div>
+{% endif %}
+{% if status.last_heartbeat %}
+<div class="stat">
+    <span class="label">Last heartbeat</span>
+    <span>{{ status.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") }}</span>
+</div>
+<div class="stat">
+    <span class="label">Heartbeat</span>
+    {% if status.heartbeat_healthy %}
+    <span class="badge ok">ALIVE</span>
+    {% else %}
+    <span class="badge stale">STALE</span>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty">No heartbeat recorded yet -- the trading engine hasn't started.</div>
+{% endif %}

@@ -1,0 +1,22 @@
+<h2>Positions</h2>
+{% if positions %}
+<table>
+    <thead>
+        <tr><th>Symbol</th><th>Qty</th><th>Avg Entry Price</th><th>Cost Basis</th><th>Updated</th></tr>
+    </thead>
+    <tbody>
+        {% for p in positions %}
+        <tr>
+            <td>{{ p.symbol }}</td>
+            <td>{{ "%.4f"|format(p.qty) }}</td>
+            <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
+            <td>${{ "%.2f"|format(p.cost_basis) }}</td>
+            <td>{{ p.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="empty">Live price / unrealized P&amp;L will populate once a real market-data feed exists (Stage 9).</div>
+{% else %}
+<div class="empty">No open positions.</div>
+{% endif %}

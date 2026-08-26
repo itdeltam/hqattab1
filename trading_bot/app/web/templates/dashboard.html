@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid">
+    <div class="panel" id="system-panel" hx-get="/partials/system" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        {% include "partials/system.html" %}
+    </div>
+
+    <div class="panel" id="account-panel" hx-get="/partials/account" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        {% include "partials/account.html" %}
+    </div>
+
+    <div class="panel" id="risk-panel">
+        {% include "partials/risk.html" %}
+    </div>
+
+    <div class="panel" id="strategy-panel">
+        {% include "partials/strategy.html" %}
+    </div>
+
+    <div class="panel" id="positions-panel" hx-get="/partials/positions" hx-trigger="load, every 10s" hx-swap="innerHTML" style="grid-column: 1 / -1;">
+        {% include "partials/positions.html" %}
+    </div>
+
+    <div class="panel" id="orders-panel" hx-get="/partials/orders" hx-trigger="load, every 10s" hx-swap="innerHTML" style="grid-column: 1 / -1;">
+        {% include "partials/orders.html" %}
+    </div>
+</div>
+{% endblock %}

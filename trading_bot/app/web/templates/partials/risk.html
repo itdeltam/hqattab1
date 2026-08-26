@@ -1,0 +1,8 @@
+<h2>Risk Limits</h2>
+<div class="stat"><span class="label">Max position size</span><span>{{ "%.1f"|format(limits.max_position_pct * 100) }}%</span></div>
+<div class="stat"><span class="label">Max daily loss</span><span>{{ "%.1f"|format(limits.max_daily_loss_pct * 100) }}%</span></div>
+<div class="stat"><span class="label">Max weekly loss</span><span>{{ "%.1f"|format(limits.max_weekly_loss_pct * 100) }}%</span></div>
+<div class="stat"><span class="label">Max drawdown (kill switch)</span><span>{{ "%.1f"|format(limits.max_drawdown_pct * 100) }}%</span></div>
+<div class="stat"><span class="label">Leverage</span><span>{% if limits.allow_leverage %}enabled, max {{ limits.max_leverage }}x{% else %}disabled{% endif %}</span></div>
+<div class="stat"><span class="label">Max correlated group</span><span>{{ "%.1f"|format(limits.max_correlated_group_pct * 100) }}% @ corr &ge; {{ limits.max_correlation }}</span></div>
+<div class="stat"><span class="label">Anti-martingale threshold</span><span>{{ "%.1f"|format(limits.max_add_to_loser_pct * 100) }}%</span></div>

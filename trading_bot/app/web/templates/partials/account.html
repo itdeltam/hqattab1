@@ -1,0 +1,8 @@
+<h2>Account</h2>
+{% if account.has_data %}
+<div class="stat"><span class="label">Equity</span><span>${{ "%.2f"|format(account.equity) }}</span></div>
+<div class="stat"><span class="label">Cash</span><span>${{ "%.2f"|format(account.cash) }}</span></div>
+<div class="stat"><span class="label">As of</span><span>{{ account.as_of.strftime("%Y-%m-%d %H:%M:%S") }}</span></div>
+{% else %}
+<div class="empty">No equity snapshot recorded yet.</div>
+{% endif %}

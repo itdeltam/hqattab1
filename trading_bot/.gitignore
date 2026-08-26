@@ -1,0 +1,20 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# runtime data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/*.log
+
+# keep the folders in git, ignore their contents
+!data/.gitkeep
+!logs/.gitkeep
