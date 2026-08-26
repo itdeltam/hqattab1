@@ -32,8 +32,8 @@ from typing import Protocol
 from alpaca.common.exceptions import APIError
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide
 from alpaca.trading.enums import OrderStatus as AlpacaOrderStatus
-from alpaca.trading.enums import TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 
 from app.broker.models import (
     AccountSnapshot,
@@ -89,6 +89,7 @@ class AlpacaTradingClient(Protocol):
     def cancel_order_by_id(self, order_id) -> None: ...
     def get_all_positions(self): ...
     def get_account(self): ...
+    def get_orders(self, filter=None): ...
 
 
 class AlpacaBroker:
@@ -192,6 +193,20 @@ class AlpacaBroker:
     def cancel_order(self, order_id: str) -> Order:
         self._client.cancel_order_by_id(order_id)
         return self.get_order(order_id)
+
+    def list_orders(self, since: datetime) -> list[Order]:
+        """Used by startup reconciliation to recover orders that reached
+        Alpaca but were never persisted locally at all (e.g. the process
+        crashed between submit_order() succeeding and the DB write that
+        would have recorded it) -- resyncing only *known* local order ids
+        can't find those, since it never had an id to look up."""
+        alpaca_orders = self._client.get_orders(
+            filter=GetOrdersRequest(status=QueryOrderStatus.ALL, after=since)
+        )
+        orders = [self._convert_order(o) for o in alpaca_orders]
+        for order in orders:
+            self._orders[order.id] = order
+        return orders
 
     def get_positions(self) -> dict[str, BrokerPosition]:
         positions = self._client.get_all_positions()

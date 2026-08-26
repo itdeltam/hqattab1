@@ -8,12 +8,13 @@ discrepancy found so it's visible (Stage 8 will wire this into alerts).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from app.broker.paper import PaperBroker
 from app.database.repository import (
+    get_all_order_ids,
     get_all_positions,
     get_open_orders,
     record_equity_snapshot,
@@ -23,6 +24,13 @@ from app.database.repository import (
 
 _EPSILON = 1e-9
 
+# How far back to look for broker orders missing from the local DB
+# entirely (see the "recovered" loop below). Bounded rather than scanning
+# full account history on every startup -- a crash between an order
+# reaching the broker and being persisted locally is a same-session event,
+# not something that could be days old.
+_ORDER_RECOVERY_LOOKBACK = timedelta(days=1)
+
 
 @dataclass(frozen=True)
 class ReconciliationReport:
@@ -30,6 +38,7 @@ class ReconciliationReport:
     positions_after: dict[str, float]
     orders_resynced: list[str]
     discrepancies: list[str]
+    orders_recovered: list[str] = field(default_factory=list)
 
     @property
     def is_clean(self) -> bool:
@@ -69,6 +78,24 @@ def reconcile_startup_state(broker: PaperBroker, session: Session, now: datetime
         upsert_order(session, broker_order, now)
         orders_resynced.append(order_record.id)
 
+    # Orders that reached the broker but were never recorded locally at
+    # all -- e.g. the process crashed between broker.submit_order()
+    # succeeding and the DB write that would have persisted it. The
+    # open-orders resync above can't find these: it only looks up ids the
+    # local DB already knows about. Position reconciliation above already
+    # self-heals from this (broker positions always win regardless), but
+    # the order audit trail would otherwise be silently lost forever.
+    known_ids = get_all_order_ids(session)
+    orders_recovered = []
+    for broker_order in broker.list_orders(since=now - _ORDER_RECOVERY_LOOKBACK):
+        if broker_order.id in known_ids:
+            continue
+        upsert_order(session, broker_order, now)
+        orders_recovered.append(broker_order.id)
+        discrepancies.append(
+            f"Order {broker_order.id} existed on the broker but was missing from local DB -- recovered"
+        )
+
     account = broker.get_account()
     record_equity_snapshot(session, now, account.equity, account.cash)
 
@@ -77,4 +104,5 @@ def reconcile_startup_state(broker: PaperBroker, session: Session, now: datetime
         positions_after={s: p.qty for s, p in broker_positions.items()},
         orders_resynced=orders_resynced,
         discrepancies=discrepancies,
+        orders_recovered=orders_recovered,
     )

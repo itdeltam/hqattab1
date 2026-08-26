@@ -3,10 +3,11 @@
 A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
-Built stage by stage; see `BUILD ORDER` in the project brief. **Stages 1-9
-(scaffolding/config, strategy math spec, backtesting engine, risk engine,
-paper broker simulator, trading engine, dashboard, monitoring & alerts,
-real Alpaca adapter) are done.** Stages 10-12 are not implemented yet.
+Built stage by stage; see `BUILD ORDER` in the project brief. **Stages
+1-10 (scaffolding/config, strategy math spec, backtesting engine, risk
+engine, paper broker simulator, trading engine, dashboard, monitoring &
+alerts, real Alpaca adapter, security & failure testing) are done.**
+Stages 11-12 are not implemented yet.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -138,6 +139,15 @@ Alpaca paper-account sanity check — requires real credentials in `.env`:
 python scripts\run_alpaca_broker_demo.py
 python scripts\run_alpaca_broker_demo.py --submit-test-order AAPL
 ```
+
+`tests/test_security_no_secrets_in_logs.py::test_telegram_failure_never_logs_the_bot_token`
+is the load-bearing test for Stage 10: it proves a real vulnerability
+found and fixed this stage — the Telegram bot token is embedded directly
+in the request URL, and network exceptions commonly echo that URL back in
+their own message, so the old `logger.exception(...)` call would have
+leaked it into the log file on any connection failure. It's parametrized
+over several realistic exception messages, asserting the token never
+appears in any log record, formatted or not.
 
 ## Research
 
@@ -399,3 +409,57 @@ already established in Stage 1).
   `TradingEngine.run_rebalance_cycle` on a schedule against real market
   data) is deliberately deferred to Stage 11 — this stage is the adapter
   itself, proven correct in isolation.
+
+## Security & failure testing (Stage 10)
+
+Deliberate fault injection, not new features — the point of this stage is
+finding and closing real gaps, not building more surface area. Four found
+and fixed:
+
+- **Secret leak in logs (security).** The Telegram bot token is embedded
+  directly in the request URL
+  (`https://api.telegram.org/bot<TOKEN>/sendMessage`). Network-layer
+  exceptions (connection errors, timeouts) commonly echo the offending URL
+  back in their own message — so `TelegramNotifier.send()`'s old
+  `logger.exception(...)` call on failure would have written the token
+  straight into the log file on any connection problem. Fixed to log only
+  the exception's type name, never its message or traceback. See
+  `tests/test_security_no_secrets_in_logs.py`.
+- **Duplicate orders on cycle replay (failure).** `run_rebalance_cycle`'s
+  target weights/deltas are derived from the broker's current positions,
+  which don't yet reflect an order that's accepted but not filled.
+  Re-running a cycle before the previous one's orders resolve — a
+  crash-restart replay, a scheduler double-fire — would recompute the
+  identical delta and submit a duplicate order on top of the first.
+  `TradingEngine` now refuses to submit new orders while any local order
+  is still open, alerting instead, and picks back up automatically once
+  they resolve. See `tests/test_failure_duplicate_orders.py`.
+- **Orders lost to a crash between submit and persist (failure — "kill
+  the connection mid-order").** The dangerous window isn't a `submit()`
+  call that raises (Stage 9 already handles that) — it's the gap between
+  `broker.submit_order()` succeeding and the DB write that would have
+  recorded it. A process killed in exactly that gap left the local DB with
+  zero record the order ever happened, even though the broker has it.
+  Position reconciliation already self-healed from this (broker positions
+  always win), but the order audit trail didn't. Both brokers gained
+  `list_orders(since)`, and `reconcile_startup_state()` now cross-checks
+  the broker's recent orders (bounded to a 1-day lookback) against what
+  the local DB actually knows, recovering anything missing. See
+  `tests/test_failure_broker_crash_recovery.py`.
+- **Stale/missing market data (failure).** A live-quote feed going dark
+  for a symbol, or entirely, must never crash the cycle or silently price
+  something at zero. `Portfolio.current_state()` already fell back to a
+  position's average cost when its price lookup returns `None`; a price
+  lookup that *raises* (a genuinely broken data source, not just a gap) is
+  left to propagate rather than being masked — those are different
+  failure modes and deserve different handling. `run_rebalance_cycle`
+  already fell back to the last known historical close when a live quote
+  is missing for a proposed order. Both fallbacks are now explicitly
+  proven, not just incidental. See `tests/test_failure_stale_data.py` and
+  the new tests in `tests/test_portfolio.py`.
+
+General review also confirmed: all database access goes through
+SQLAlchemy's query builder (no raw/string-formatted SQL anywhere, so no
+SQL-injection surface), `config/risk_limits.yaml` is loaded with
+`yaml.safe_load` (not `yaml.load`), and the dashboard's Jinja2 templates
+use the framework's default autoescaping (no `|safe` filters anywhere).

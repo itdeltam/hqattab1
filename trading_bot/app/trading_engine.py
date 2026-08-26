@@ -26,6 +26,7 @@ from app.alerts.manager import AlertManager
 from app.broker.models import Order
 from app.broker.paper import PaperBroker
 from app.database.reconciliation import ReconciliationReport, reconcile_startup_state
+from app.database.repository import get_open_orders
 from app.execution.order_manager import OrderManager
 from app.monitoring.heartbeat import DEFAULT_HEARTBEAT_COMPONENT, record_heartbeat
 from app.portfolio.portfolio import Portfolio
@@ -45,6 +46,7 @@ class CycleResult:
     proposed_orders: list[ProposedOrder]
     risk_decision: RiskDecision
     submitted_orders: list[Order]
+    skipped_reason: str | None = None
 
 
 @dataclass
@@ -109,6 +111,32 @@ class TradingEngine:
 
         self.heartbeat(now)
         self.portfolio.record_equity_snapshot(now)
+
+        # Refuse to compute and submit new orders while orders from a
+        # previous cycle are still unresolved. Target weights/deltas are
+        # derived from the broker's current positions, which don't yet
+        # reflect an order that's accepted but not filled -- rerunning a
+        # cycle before that resolves (e.g. after a crash-restart replay, or
+        # a scheduler double-fire) would recompute the identical delta and
+        # submit a duplicate order on top of the first. Broker/DB state
+        # self-heals; a duplicate live order does not.
+        open_orders = get_open_orders(self.session)
+        if open_orders:
+            detail = (
+                f"{len(open_orders)} order(s) still open from a previous cycle "
+                f"({', '.join(o.id for o in open_orders)}); refusing to submit new "
+                "orders until they resolve."
+            )
+            self.alert_manager.notify(AlertEvent(
+                severity=Severity.WARNING, title="Rebalance cycle skipped: unresolved open orders",
+                detail=detail, timestamp=now,
+            ))
+            return CycleResult(
+                target_weights={}, selected=set(), proposed_orders=[],
+                risk_decision=RiskDecision(approved_orders=[], vetoed_orders=[], kill_switch_engaged=False),
+                submitted_orders=[], skipped_reason=detail,
+            )
+
         portfolio_state = self.portfolio.current_state(now, correlations=correlations)
 
         eligible = price_history.apply(lambda s: trend_filter(s, params))

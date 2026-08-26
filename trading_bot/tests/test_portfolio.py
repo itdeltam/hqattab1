@@ -101,6 +101,40 @@ def test_peak_equity_reflects_a_new_all_time_high_not_yet_recorded(session, brok
     assert state.peak_equity == pytest.approx(100_000.0)
 
 
+def test_current_state_falls_back_to_avg_cost_when_price_lookup_returns_none(session, broker, prices):
+    """Stage 10 failure testing: a stale/missing quote for a held symbol
+    (price feed gap, delisted symbol, whatever) must never crash portfolio
+    valuation or silently price the position at zero -- fall back to the
+    known avg cost, which is always a defensible, non-fabricated number."""
+    broker.submit_order(OrderRequest("AAA", OrderSide.BUY, 10), now=NOW)
+    broker.advance_time(NOW)
+
+    portfolio = Portfolio(broker, session, price_lookup=lambda s: None)  # simulates a dead feed
+
+    state = portfolio.current_state(NOW)
+
+    assert state.positions["AAA"].current_price == pytest.approx(100.0)  # avg_entry_price fallback
+    assert state.equity == pytest.approx(100_000.0)  # never becomes NaN/zero
+
+
+def test_current_state_propagates_price_lookup_exceptions_instead_of_masking_them(session, broker):
+    """A price feed that raises (bad data source, malformed response) is a
+    different failure mode than one that legitimately has no data (returns
+    None) -- it must propagate and crash the cycle (for Stage 8's watchdog
+    to alert on and retry) rather than being silently swallowed into a
+    fallback value that could hide a real data-integrity problem."""
+    broker.submit_order(OrderRequest("AAA", OrderSide.BUY, 10), now=NOW)
+    broker.advance_time(NOW)
+
+    def broken_price_lookup(symbol):
+        raise ValueError("malformed market data response")
+
+    portfolio = Portfolio(broker, session, price_lookup=broken_price_lookup)
+
+    with pytest.raises(ValueError):
+        portfolio.current_state(NOW)
+
+
 def test_week_start_equity_uses_first_snapshot_since_monday(session, broker, prices):
     monday = datetime(2024, 1, 1, 9, 30)
     portfolio = Portfolio(broker, session, price_lookup=lambda s: prices.get(s))

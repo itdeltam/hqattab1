@@ -57,6 +57,11 @@ class TelegramNotifier:
                 return True
             logger.warning("Telegram send failed: status=%s", getattr(response, "status_code", "?"))
             return False
-        except Exception:
-            logger.exception("Telegram send raised -- swallowed, alerting must never crash the caller")
+        except Exception as exc:
+            # Never log str(exc) or use logger.exception() here: the request
+            # URL embeds the bot token (https://api.telegram.org/bot<TOKEN>/...),
+            # and network-layer exceptions (connection errors, timeouts) very
+            # commonly include the offending URL in their own message. Logging
+            # the exception body would leak the secret into the log file.
+            logger.warning("Telegram send raised %s -- swallowed, alerting must never crash the caller", type(exc).__name__)
             return False

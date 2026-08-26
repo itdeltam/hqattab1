@@ -159,6 +159,9 @@ class PaperBroker:
     def get_order(self, order_id: str) -> Order:
         return self._orders[order_id]
 
+    def list_orders(self, since: datetime) -> list[Order]:
+        return [order for order in self._orders.values() if order.submitted_at >= since]
+
     def get_positions(self) -> dict[str, BrokerPosition]:
         return dict(self._positions)
 

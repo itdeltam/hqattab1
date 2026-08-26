@@ -51,6 +51,10 @@ def get_open_orders(session: Session) -> list[OrderRecord]:
     ).all())
 
 
+def get_all_order_ids(session: Session) -> set[str]:
+    return set(session.scalars(select(OrderRecord.id)).all())
+
+
 def record_equity_snapshot(session: Session, now: datetime, equity: float, cash: float) -> None:
     session.add(EquitySnapshot(timestamp=now, equity=equity, cash=cash))
     session.commit()

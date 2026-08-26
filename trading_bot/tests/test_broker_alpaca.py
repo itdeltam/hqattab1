@@ -50,6 +50,8 @@ class FakeTradingClient:
         self.cancel_calls = []
         self.positions = []
         self.account = None
+        self.list_orders_result = []
+        self.get_orders_calls = []
 
     def submit_order(self, order_data):
         if self.submit_order_exc:
@@ -71,6 +73,10 @@ class FakeTradingClient:
 
     def get_account(self):
         return self.account
+
+    def get_orders(self, filter=None):
+        self.get_orders_calls.append(filter)
+        return self.list_orders_result
 
 
 @pytest.fixture
@@ -227,3 +233,42 @@ def test_status_mapping_never_misclassifies_open_orders_as_done(broker, client, 
     order = broker.get_order(str(order_id))
 
     assert order.status == expected
+
+
+def test_list_orders_converts_results(broker, client):
+    order_id = uuid.uuid4()
+    client.list_orders_result = [
+        fake_alpaca_order(id=order_id, status=AlpacaOrderStatus.FILLED, qty="5", filled_qty="5", filled_avg_price="100.0"),
+    ]
+
+    orders = broker.list_orders(since=NOW)
+
+    assert len(orders) == 1
+    assert orders[0].id == str(order_id)
+    assert orders[0].status == OrderStatus.FILLED
+
+
+def test_list_orders_registers_open_orders_for_future_advance_time_polling(broker, client):
+    """Reconciliation uses list_orders() to recover orders the local DB
+    never learned about (e.g. a crash between submit and persist). Those
+    recovered orders must still be pollable to completion afterwards --
+    prove list_orders() feeds the same internal tracking advance_time()
+    reads, not just a one-off snapshot."""
+    order_id = uuid.uuid4()
+    client.list_orders_result = [fake_alpaca_order(id=order_id, status=AlpacaOrderStatus.NEW, qty="5", filled_qty="0")]
+    broker.list_orders(since=NOW)
+
+    client.orders_by_id[str(order_id)] = fake_alpaca_order(
+        id=order_id, status=AlpacaOrderStatus.FILLED, qty="5", filled_qty="5", filled_avg_price="100.0",
+    )
+    updated = broker.advance_time(NOW)
+
+    assert len(updated) == 1
+    assert updated[0].status == OrderStatus.FILLED
+
+
+def test_list_orders_passes_since_as_the_after_filter(broker, client):
+    broker.list_orders(since=NOW)
+
+    assert len(client.get_orders_calls) == 1
+    assert client.get_orders_calls[0].after == NOW
