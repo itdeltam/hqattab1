@@ -4,10 +4,12 @@ A 24/7 autonomous algorithmic trading system for US equities/ETFs (long-only,
 diversified trend/momentum), built on Alpaca, SQLite/SQLAlchemy, and FastAPI.
 
 Built stage by stage; see `BUILD ORDER` in the project brief. **Stages
-1-10 (scaffolding/config, strategy math spec, backtesting engine, risk
+1-11 (scaffolding/config, strategy math spec, backtesting engine, risk
 engine, paper broker simulator, trading engine, dashboard, monitoring &
-alerts, real Alpaca adapter, security & failure testing) are done.**
-Stages 11-12 are not implemented yet.
+alerts, real Alpaca adapter, security & failure testing, extended
+paper-trading deployment against live market data) are done.** Stage 12
+(live-trading readiness checklist) is not implemented yet -- that one is
+a decision for you, not code.
 
 ## Safety model (non-negotiable, see project brief for full list)
 
@@ -48,8 +50,12 @@ defaults in `.env.example` are placeholders, not recommendations.
 python -m app.main
 ```
 
-In `PAPER` or `APPROVAL` mode this starts immediately. In `LIVE` mode it
-will print an account/risk-limit banner and block on a typed confirmation.
+In `PAPER` or `APPROVAL` mode this starts immediately and runs forever
+(heartbeat, fill-polling, and monthly rebalance jobs against real Alpaca
+paper-account market data — see **Extended paper-trading deployment**
+below). In `LIVE` mode it will print an account/risk-limit banner and
+block on a typed confirmation before doing the same against the real
+account. Stop with Ctrl+C (or a service stop) for a clean shutdown.
 
 On Windows, `start_trader.bat` wraps this for use with NSSM (auto-start /
 auto-restart) — see the comment header in that file.
@@ -148,6 +154,12 @@ their own message, so the old `logger.exception(...)` call would have
 leaked it into the log file on any connection failure. It's parametrized
 over several realistic exception messages, asserting the token never
 appears in any log record, formatted or not.
+
+`tests/test_scheduling.py`'s job-failure tests are the load-bearing ones
+for Stage 11: they prove each scheduled job catches its own exceptions
+and alerts through the engine's AlertManager, rather than relying on
+APScheduler to surface them (it doesn't — see the Stage 11 section
+below).
 
 ## Research
 
@@ -462,4 +474,93 @@ General review also confirmed: all database access goes through
 SQLAlchemy's query builder (no raw/string-formatted SQL anywhere, so no
 SQL-injection surface), `config/risk_limits.yaml` is loaded with
 `yaml.safe_load` (not `yaml.load`), and the dashboard's Jinja2 templates
+use the framework's default autoescaping (no `|safe` filters anywhere).
+
+## Extended paper-trading deployment (Stage 11)
+
+Everything built through Stage 10 has proven the pipeline correct; this
+stage wires it to actually run, continuously, against real market data.
+`python -m app.main` in PAPER mode now starts the real 24/7 loop, not
+just the safety gate — the same `run()` path LIVE mode uses once
+confirmed, per the confirmed "same code path, only endpoint differs"
+architecture.
+
+- **`app/strategy/universe.py`**: the Stage 2 research notebook's
+  recommended v1 basket — 11 SPDR sector ETFs, broad market (SPY/QQQ/IWM),
+  international (EFA/EEM), bonds (TLT/IEF/SHY), and alternatives
+  (GLD/DBC/VNQ). 22 liquid, diversified ETFs, not individual equities, per
+  that notebook's reasoning (structural diversification, no single-name
+  risk, deep liquidity, a trivial defensive leg via SHY).
+- **`app/market_data/alpaca_bars.py`**: `AlpacaMarketData` fetches daily
+  bars (split/dividend-adjusted, `Adjustment.ALL` — a momentum strategy
+  must never see a false signal break from an ETF distribution) shaped
+  into the same close-price DataFrame the strategy/backtester already
+  expect, plus latest-trade prices for order pricing. Depends on
+  alpaca-py's data client through a narrow Protocol — fully faked in
+  tests, same pattern as the Stage 9 broker adapter.
+- **`app/market_data/live_price_cache.py`**: `TradingEngine.price_lookup`
+  is captured once at construction time and can't be swapped per cycle.
+  `LivePriceCache` is the small mutable cell that bridges this — the
+  scheduler calls `update()` with a fresh quote snapshot immediately
+  before each rebalance cycle, and the engine's `price_lookup` reads
+  through `get()`. This isn't just cosmetic: `Position.unrealized_pnl_pct`
+  drives the Risk Engine's anti-martingale rule, so how fresh this cache
+  is matters for a real safety check, not only for display.
+- **`app/scheduling.py`**: `TradingScheduler` wraps three APScheduler
+  jobs — `heartbeat` and `poll_fills` on fixed short intervals (so
+  heartbeat keeps landing even on days the strategy does nothing), and
+  `rebalance` firing every weekday at a configured time but only actually
+  doing anything on the first NYSE session of the month (checked against
+  `app/backtesting/calendar.py`'s real trading-calendar logic, not a cron
+  expression that has to separately encode market holidays). Runs in
+  `America/New_York` regardless of the host machine's local timezone
+  setting, since a Windows desktop isn't guaranteed to be set to Eastern.
+- **Critical correctness detail, found by actually reading APScheduler's
+  own executor source before wiring this**: APScheduler catches *every*
+  exception a job raises internally, to keep its own loop alive, and
+  never re-raises it to whatever called `scheduler.start()`. That means
+  wrapping `start()` in Stage 8's crash-restart watchdog (which
+  `app/main.py` still does, as a backstop against the scheduler's own
+  internals failing) gives **zero** protection against a job itself
+  failing — a broken `run_rebalance` would otherwise disappear into
+  APScheduler's own internal logger and nowhere else. Each job method in
+  `TradingScheduler` therefore catches its own exceptions and explicitly
+  alerts through the engine's `AlertManager` — that is the real safety
+  net for job failures.
+- **`app/bootstrap.py`**: the one place that assembles the real broker,
+  market data client, risk limits (config + yaml), alerts, and database
+  session into a `TradingScheduler` from `Settings` — kept separate from
+  `app/main.py` so it can be constructed and inspected in tests without
+  ever calling the blocking `scheduler.start()`.
+- **`app/main.py`**: `run(settings)` builds the scheduler, runs startup
+  reconciliation (still mandatory, still broker-authoritative, per every
+  prior stage), then runs the scheduler forever. A reconciliation failure
+  (e.g. bad credentials, no network) is deliberately left to crash loudly
+  here rather than being caught and retried — the non-negotiable rule is
+  "reconcile before any trading," so if that can't succeed the process
+  must not proceed, and a loud crash (visible to NSSM, to a human) is the
+  correct failure mode, not a silent retry loop.
+- Approximation worth being honest about: the backtester assumes a fill
+  exactly at the session's opening price. A live market order fired a few
+  minutes after the open (`REBALANCE_HOUR`/`REBALANCE_MINUTE`, default
+  9:35 ET) fills at whatever price is then prevailing, not literally the
+  opening print — a real, small, permanent divergence from the backtest's
+  idealization, not something to pretend away.
+
+New config: `HEARTBEAT_INTERVAL_SECONDS`, `POLL_FILLS_INTERVAL_SECONDS`,
+`REBALANCE_HOUR`, `REBALANCE_MINUTE` (see `.env.example`).
+
+24 new tests (284 total), all against fakes/stubs for the Alpaca data
+client and a stub market-data source — plus one true end-to-end
+integration test (`tests/test_scheduling_integration.py`) that drives a
+real `TradingEngine` + `PaperBroker` through `TradingScheduler.run_rebalance()`
+and confirms an order is actually submitted and, once polled, filled —
+proving the full scheduler → engine → strategy → risk → broker pipeline
+works together, not just each piece in isolation.
+
+Not done here, deliberately: this stage makes the loop *run*; it doesn't
+decide *when* it's safe to point at a real Alpaca paper account and leave
+it running unattended for days, or what "extended" should mean in
+practice (how long, what to watch, when to call it validated). That
+judgment, and Stage 12's live-trading readiness checklist, are yours.
 use the framework's default autoescaping (no `|safe` filters anywhere).

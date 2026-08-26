@@ -15,7 +15,7 @@ pandas_market_calendars>=4.4
 # --- Stage 5/9: broker ---
 alpaca-py>=0.33
 
-# --- Stage 6: scheduling ---
+# --- Stage 11: scheduling ---
 APScheduler>=3.10
 
 # --- Stage 7: dashboard ---

@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # --- Monitoring ---
     heartbeat_stale_seconds: float = Field(default=120.0, gt=0)
 
+    # --- Scheduling (Stage 11) ---
+    heartbeat_interval_seconds: int = Field(default=60, gt=0)
+    poll_fills_interval_seconds: int = Field(default=60, gt=0)
+    # Time of day (local exchange time, America/New_York) the rebalance job
+    # checks whether today is a scheduled rebalance date. A few minutes
+    # after the 9:30 ET open, not exactly at it -- unlike the backtester,
+    # a live market order fired here fills at whatever price then
+    # prevails, not literally the opening print.
+    rebalance_hour: int = Field(default=9, ge=0, le=23)
+    rebalance_minute: int = Field(default=35, ge=0, le=59)
+
     # --- Logging ---
     log_level: str = Field(default="INFO")
 
